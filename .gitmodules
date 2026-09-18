@@ -3,7 +3,8 @@
 	url = https://github.com/chriskohlhoff/asio.git
 [submodule "src/nlink_utils/nlink_unpack"]
 	path = src/nlink_utils/nlink_unpack
-	url = https://github.com/nooploop-dev/nlink_unpack.git
+	url = git@github.com:learnsyslab/nlink_unpack.git
+	branch = fix/nodeframe-data-length-bounds
 [submodule "src/nlink_utils/protocol_extracter"]
 	path = src/nlink_utils/protocol_extracter
 	url = https://github.com/nooploop-dev/protocol_extracter.git
