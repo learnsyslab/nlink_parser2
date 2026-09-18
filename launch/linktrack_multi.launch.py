@@ -47,8 +47,9 @@ def generate_launch_description():
 
     baud_rate_arg = DeclareLaunchArgument(
         'baud_rate',
-        default_value='921600',
-        description='Serial baud rate, applied to every module'
+        default_value='3000000',
+        description='Serial baud rate, applied to every module. '
+                    'Modules are configured for 3000000 in this lab. A mismatch does NOT look like an error: the port opens, bytes arrive, and the stream is pure noise whose byte count scales with the rate you guessed, so the radio looks dead while it is in fact ranging normally. Check this first if the tags appear silent.'
     )
 
     return LaunchDescription([
