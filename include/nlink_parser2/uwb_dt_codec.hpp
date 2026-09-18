@@ -48,12 +48,16 @@ enum MsgType : uint8_t
     MSG_VEL      = 0x02,  /* 15 B: linear velocity + per-axis sigmas */
     MSG_SYNC_REQ = 0x03,  /*  8 B: clock sync request */
     MSG_SYNC_RSP = 0x04,  /* 10 B: clock sync response */
+    MSG_GNSS_POS = 0x05,  /* 22 B: GNSS position solution */
+    MSG_GNSS_VEL = 0x06,  /* 14 B: GNSS velocity and heading */
 };
 
 constexpr size_t POSE_SIZE     = 24;
 constexpr size_t VEL_SIZE      = 15;
 constexpr size_t SYNC_REQ_SIZE = 8;
 constexpr size_t SYNC_RSP_SIZE = 10;
+constexpr size_t GNSS_POS_SIZE = 22;
+constexpr size_t GNSS_VEL_SIZE = 14;
 
 /* Largest payload that still fits a single transmission once COBS framing
  * (+1 overhead byte, +1 delimiter) is applied. */
@@ -75,6 +79,31 @@ struct Vel
     uint16_t t_ms = 0;
     double vx = 0, vy = 0, vz = 0;              /* m/s */
     double svx = 0, svy = 0, svz = 0;           /* velocity sigmas, m/s */
+};
+
+/* A GNSS fix carries absolute time, so when both robots have one their clocks
+ * agree to far better than the +-10 ms the UWB sync exchange manages. Treat
+ * fix_type as a statement about timestamp quality as well as position quality. */
+struct GnssPos
+{
+    uint8_t seq = 0;
+    double lat_deg = 0;           /* WGS84, 1e-7 deg on the wire (~1.1 cm) */
+    double lon_deg = 0;
+    double height_m = 0;          /* 1 mm on the wire, +-8388 m */
+    double sigma_h = 0;           /* horizontal position sigma, metres */
+    double sigma_v = 0;           /* vertical position sigma, metres */
+    uint8_t fix_type = 0;         /* receiver-defined, 0..15 */
+    uint8_t num_sats = 0;         /* saturates at 15 */
+    uint32_t gps_tow_ms = 0;      /* time of week */
+};
+
+struct GnssVel
+{
+    uint8_t seq = 0;              /* pairs with the GnssPos of the same cycle */
+    double heading_deg = 0;       /* 0..360, 0.0055 deg on the wire */
+    double vn = 0, ve = 0, vd = 0; /* m/s, NED */
+    double sigma_heading_deg = 0;
+    double sigma_vel = 0;         /* m/s */
 };
 
 struct SyncReq
@@ -168,6 +197,55 @@ inline void puti16(std::vector<uint8_t> & b, int16_t v)
     put16(b, static_cast<uint16_t>(v));
 }
 
+inline int32_t saturate32(double v)
+{
+    if (v > 2147483647.0)
+    {
+        return 2147483647;
+    }
+    if (v < -2147483648.0)
+    {
+        return -2147483647 - 1;
+    }
+    return static_cast<int32_t>(std::llround(v));
+}
+
+inline void puti24(std::vector<uint8_t> & b, int32_t v)
+{
+    if (v > 8388607)
+    {
+        v = 8388607;
+    }
+    else if (v < -8388608)
+    {
+        v = -8388608;
+    }
+    const uint32_t u = static_cast<uint32_t>(v) & 0xFFFFFFu;
+    b.push_back(static_cast<uint8_t>(u & 0xFF));
+    b.push_back(static_cast<uint8_t>((u >> 8) & 0xFF));
+    b.push_back(static_cast<uint8_t>((u >> 16) & 0xFF));
+}
+
+inline int32_t geti24(const uint8_t * p)
+{
+    uint32_t u = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+                 (static_cast<uint32_t>(p[2]) << 16);
+    if (u & 0x800000u)
+    {
+        u |= 0xFF000000u;
+    }
+    return static_cast<int32_t>(u);
+}
+
+inline void puti32(std::vector<uint8_t> & b, int32_t v)
+{
+    const uint32_t u = static_cast<uint32_t>(v);
+    for (int i = 0; i < 4; ++i)
+    {
+        b.push_back(static_cast<uint8_t>((u >> (8 * i)) & 0xFF));
+    }
+}
+
 inline void put32(std::vector<uint8_t> & b, uint32_t v)
 {
     for (int i = 0; i < 4; ++i)
@@ -184,6 +262,14 @@ inline uint16_t get16(const uint8_t * p)
 inline int16_t geti16(const uint8_t * p)
 {
     return static_cast<int16_t>(get16(p));
+}
+
+inline int32_t geti32(const uint8_t * p)
+{
+    return static_cast<int32_t>(static_cast<uint32_t>(p[0]) |
+                                (static_cast<uint32_t>(p[1]) << 8) |
+                                (static_cast<uint32_t>(p[2]) << 16) |
+                                (static_cast<uint32_t>(p[3]) << 24));
 }
 
 inline uint32_t get32(const uint8_t * p)
@@ -312,6 +398,47 @@ inline std::vector<uint8_t> encodeVel(const Vel & v)
     return detail::finish(b);
 }
 
+inline std::vector<uint8_t> encodeGnssPos(const GnssPos & g)
+{
+    std::vector<uint8_t> b;
+    b.reserve(GNSS_POS_SIZE);
+    b.push_back(MSG_GNSS_POS);
+    b.push_back(g.seq);
+    puti32(b, saturate32(g.lat_deg * 1e7));
+    puti32(b, saturate32(g.lon_deg * 1e7));
+    puti24(b, saturate32(g.height_m * 1000.0));
+    b.push_back(encodeSigma(g.sigma_h));
+    b.push_back(encodeSigma(g.sigma_v));
+    b.push_back(static_cast<uint8_t>((std::min<uint8_t>(g.num_sats, 15) << 4) |
+                                     (g.fix_type & 0x0F)));
+    put32(b, g.gps_tow_ms);
+    return detail::finish(b);
+}
+
+inline std::vector<uint8_t> encodeGnssVel(const GnssVel & g)
+{
+    std::vector<uint8_t> b;
+    b.reserve(GNSS_VEL_SIZE);
+    b.push_back(MSG_GNSS_VEL);
+    b.push_back(g.seq);
+
+    /* Wrapped into 0..360 before scaling so a heading of -1 or 361 degrees
+     * encodes correctly instead of saturating. */
+    double h = std::fmod(g.heading_deg, 360.0);
+    if (h < 0.0)
+    {
+        h += 360.0;
+    }
+    put16(b, static_cast<uint16_t>(std::lround(h * 65536.0 / 360.0)) );
+
+    puti16(b, saturate16(g.vn * 1000.0));
+    puti16(b, saturate16(g.ve * 1000.0));
+    puti16(b, saturate16(g.vd * 1000.0));
+    b.push_back(encodeSigma(g.sigma_heading_deg));
+    b.push_back(encodeSigma(g.sigma_vel));
+    return detail::finish(b);
+}
+
 inline std::vector<uint8_t> encodeSyncReq(const SyncReq & s)
 {
     std::vector<uint8_t> b;
@@ -343,6 +470,8 @@ inline bool expectedSize(uint8_t type, size_t & out)
     case MSG_VEL:      out = VEL_SIZE;      return true;
     case MSG_SYNC_REQ: out = SYNC_REQ_SIZE; return true;
     case MSG_SYNC_RSP: out = SYNC_RSP_SIZE; return true;
+    case MSG_GNSS_POS: out = GNSS_POS_SIZE; return true;
+    case MSG_GNSS_VEL: out = GNSS_VEL_SIZE; return true;
     default:                                return false;
     }
 }
@@ -394,6 +523,34 @@ inline Vel decodeVel(const std::vector<uint8_t> & p)
     o.svx = decodeSigma(p[10]);
     o.svy = decodeSigma(p[11]);
     o.svz = decodeSigma(p[12]);
+    return o;
+}
+
+inline GnssPos decodeGnssPos(const std::vector<uint8_t> & p)
+{
+    GnssPos o;
+    o.seq = p[1];
+    o.lat_deg = geti32(&p[2]) / 1e7;
+    o.lon_deg = geti32(&p[6]) / 1e7;
+    o.height_m = geti24(&p[10]) / 1000.0;
+    o.sigma_h = decodeSigma(p[13]);
+    o.sigma_v = decodeSigma(p[14]);
+    o.fix_type = static_cast<uint8_t>(p[15] & 0x0F);
+    o.num_sats = static_cast<uint8_t>(p[15] >> 4);
+    o.gps_tow_ms = get32(&p[16]);
+    return o;
+}
+
+inline GnssVel decodeGnssVel(const std::vector<uint8_t> & p)
+{
+    GnssVel o;
+    o.seq = p[1];
+    o.heading_deg = get16(&p[2]) * 360.0 / 65536.0;
+    o.vn = geti16(&p[4]) / 1000.0;
+    o.ve = geti16(&p[6]) / 1000.0;
+    o.vd = geti16(&p[8]) / 1000.0;
+    o.sigma_heading_deg = decodeSigma(p[10]);
+    o.sigma_vel = decodeSigma(p[11]);
     return o;
 }
 
