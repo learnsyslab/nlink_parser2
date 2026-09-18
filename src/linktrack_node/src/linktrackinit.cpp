@@ -13,6 +13,7 @@
 #include "serial/serial_port.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/u_int8_multi_array.hpp"
 
 #include "nlink_utils/nutils.h"
 #include "nlink_utils/linktrack_protocols.h"
@@ -67,10 +68,28 @@ static void DTCallback(const std_msgs::msg::String::SharedPtr msg)
     }
 }
 
+/* Binary-safe variant of DTCallback.
+ *
+ * std_msgs::msg::String is a UTF-8 string, so rclpy publishers mangle or drop
+ * payloads containing bytes above 0x7F; only ASCII survives that path. The
+ * radio itself is fully binary transparent, so binary senders should publish
+ * UInt8MultiArray here instead. See nlink_parser2/uwb_dt_codec.hpp. */
+static void DTBinCallback(const std_msgs::msg::UInt8MultiArray::SharedPtr msg)
+{
+    if (serial_ && !msg->data.empty())
+    {
+        serial_->write(std::string(
+            reinterpret_cast<const char *>(msg->data.data()), msg->data.size()));
+    }
+}
+
 void Init::initDataTransmission()
 {
     dt_sub_ = node_->create_subscription<std_msgs::msg::String>(
         "nlink_linktrack_data_transmission", 1000, DTCallback);
+
+    dt_bin_sub_ = node_->create_subscription<std_msgs::msg::UInt8MultiArray>(
+        "nlink_linktrack_data_transmission_bin", 1000, DTBinCallback);
 }
 
 void Init::initAnchorFrame0(NProtocolExtracter* protocol_extraction)

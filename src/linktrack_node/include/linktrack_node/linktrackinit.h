@@ -4,6 +4,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include <unordered_map>
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/u_int8_multi_array.hpp"
 #include "nlink_utils.h"
 #include "nprotocol_extracter.h"
 #include "nlink_utils/nlink_protocol.h"
@@ -39,6 +40,7 @@ private:
     std::unordered_map<NProtocolBase *, rclcpp::PublisherBase::SharedPtr> publishers_;
     rclcpp::Node::SharedPtr node_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr dt_sub_;
+    rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr dt_bin_sub_;
 };
 
 }  /* namespace linktrack */

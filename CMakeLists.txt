@@ -141,6 +141,11 @@ install(DIRECTORY launch msg
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Headers meant for downstream packages (uwb_dt_codec.hpp).
+install(DIRECTORY include/
+  DESTINATION include
+)
+
 ament_export_include_directories(include)
 ament_export_libraries(serial nlink_utils)
 ament_export_dependencies(rclcpp builtin_interfaces std_msgs rosidl_default_generators)
